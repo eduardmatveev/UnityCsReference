@@ -10,6 +10,7 @@ using UnityEngine;
 using UnityEditor.Utils;
 using System.Text;
 using UnityEditor.Scripting.ScriptCompilation;
+using UnityEditorInternal;
 
 namespace UnityEditor.Scripting.Compilers
 {
@@ -39,8 +40,37 @@ namespace UnityEditor.Scripting.Compilers
             if (!_island._development_player && !_island._editor)
                 arguments.Add("-optimize");
 
+            var assemblyAssetName = Path.GetFileName(_island._output);
+            var assemblyAssetPath = Compilation.CompilationPipeline.GetAssemblyDefinitionFilePathFromAssemblyName(assemblyAssetName.Replace(Path.GetExtension(_island._output), ""));
+            var assemblyAsset = !string.IsNullOrEmpty(assemblyAssetPath) ? CustomScriptAssemblyData.FromJson(AssetDatabase.LoadAssetAtPath<AssemblyDefinitionAsset>(assemblyAssetPath).text) : null;
+            
             foreach (string dll in _island._references)
-                arguments.Add("-r:" + PrepareFileName(dll));
+            {
+                var refAssemblyAssetName = Path.GetFileName(dll);
+                var refAssemblyAssetPath = Compilation.CompilationPipeline.GetAssemblyDefinitionFilePathFromAssemblyName(refAssemblyAssetName.Replace(Path.GetExtension(dll), ""));
+                var refAssemblyAsset = !string.IsNullOrEmpty(refAssemblyAssetPath) ? CustomScriptAssemblyData.FromJson(AssetDatabase.LoadAssetAtPath<AssemblyDefinitionAsset>(refAssemblyAssetPath).text) : null;
+                if (refAssemblyAsset != null && refAssemblyAsset.sharedProject)
+                {
+                    var islands = EditorCompilationInterface.GetAllMonoIslands();
+                    foreach (var island in islands)
+                    {
+                        if (Path.GetFileName(island._output) == refAssemblyAssetName)
+                        {
+                            foreach (var source in island._files)
+                            {
+                                arguments.Add(PrepareFileName(source));
+                            }
+                            break;
+                        }
+                    }
+                }
+                else
+                {
+                    if (assemblyAsset != null && assemblyAsset.excludeAssembliesReferences.Contains(refAssemblyAssetName))
+                        continue;
+                    arguments.Add("-r:" + PrepareFileName(dll));
+                }
+            }
             foreach (string define in _island._defines.Distinct())
                 arguments.Add("-define:" + define);
             foreach (string source in _island._files)

@@ -19,6 +19,8 @@ namespace UnityEditor.Scripting.ScriptCompilation
         public string[] includePlatforms;
         public string[] excludePlatforms;
         public bool allowUnsafeCode;
+        public bool sharedProject;
+        public List<string> excludeAssembliesReferences;
 
         public static CustomScriptAssemblyData FromJson(string json)
         {
@@ -85,6 +87,8 @@ namespace UnityEditor.Scripting.ScriptCompilation
         public OptionalUnityReferences OptionalUnityReferences { get; set; }
         public CustomScriptAssemblyPlatform[] IncludePlatforms { get; set;  }
         public CustomScriptAssemblyPlatform[] ExcludePlatforms { get; set;  }
+        public bool SharedProject { get; set; }
+        public List<string> ExcludeAssembliesReferences { get; set; }
 
         public EditorCompilation.PackageAssembly? PackageAssembly { get; set; }
         public ScriptCompilerOptions CompilerOptions { get; set; }
@@ -202,6 +206,8 @@ namespace UnityEditor.Scripting.ScriptCompilation
             customScriptAssembly.PathPrefix = modifiedDirectory;
             customScriptAssembly.References = new string[0];
             customScriptAssembly.CompilerOptions = new ScriptCompilerOptions();
+            customScriptAssembly.SharedProject = false;
+            customScriptAssembly.ExcludeAssembliesReferences = new List<string>();
 
             return customScriptAssembly;
         }
@@ -219,6 +225,8 @@ namespace UnityEditor.Scripting.ScriptCompilation
             customScriptAssembly.References = customScriptAssemblyData.references;
             customScriptAssembly.FilePath = path;
             customScriptAssembly.PathPrefix = pathPrefix;
+            customScriptAssembly.ExcludeAssembliesReferences = new List<string>(customScriptAssemblyData.excludeAssembliesReferences);
+            customScriptAssembly.SharedProject = customScriptAssemblyData.sharedProject;
 
             customScriptAssemblyData.optionalUnityReferences = customScriptAssemblyData.optionalUnityReferences ?? new string[0];
             foreach (var optionalUnityReferenceString in customScriptAssemblyData.optionalUnityReferences)

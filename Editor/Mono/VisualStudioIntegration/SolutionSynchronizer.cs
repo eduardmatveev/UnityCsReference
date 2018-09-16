@@ -17,8 +17,6 @@ using UnityEditor.Scripting.ScriptCompilation;
 using UnityEditor.Utils;
 using UnityEditorInternal;
 using UnityEditor.Scripting.Compilers;
-
-using Mono.Cecil;
 using UnityEditor.Compilation;
 
 namespace UnityEditor.VisualStudioIntegration
@@ -303,7 +301,23 @@ namespace UnityEditor.VisualStudioIntegration
             ScriptCompilerBase.ResponseFileData responseFileData,
             List<MonoIsland> allProjectIslands)
         {
-            SyncProjectFileIfNotChanged(ProjectFile(island), ProjectText(island, ModeForCurrentExternalEditor(), allAssetsProjectParts, responseFileData, allProjectIslands));
+            var path = ProjectFile(island);
+            var assemblyAsset = GeAssemblyAsset(island);
+            var newContents = ProjectText(island, ModeForCurrentExternalEditor(), allAssetsProjectParts, responseFileData, allProjectIslands, assemblyAsset);
+            if (assemblyAsset != null && assemblyAsset.sharedProject)
+            {
+                SyncFileIfNotChanged(path, newContents.Item1);
+                SyncFileIfNotChanged(path.Replace(".shproj", ".projitems"), newContents.Item2);
+            }
+            else
+            {
+                if (Path.GetExtension(path) == ".csproj")
+                {
+                    newContents = new Tuple<string, string>(AssetPostprocessingInternal.CallOnGeneratedCSProject(path, newContents.Item1), string.Empty);
+                }
+                SyncFileIfNotChanged(path, newContents.Item1);
+            }
+            
         }
 
         static void SyncProjectFileIfNotChanged(string path, string newContents)
@@ -357,13 +371,35 @@ namespace UnityEditor.VisualStudioIntegration
             return false;
         }
 
-        string ProjectText(MonoIsland island,
+        Tuple<string, string> ProjectText(MonoIsland island,
             Mode mode,
             Dictionary<string, string> allAssetsProjectParts,
             ScriptCompilerBase.ResponseFileData responseFileData,
-            List<MonoIsland> allProjectIslands)
+            List<MonoIsland> allProjectIslands,
+            CustomScriptAssemblyData assemblyAsset)
         {
-            var projectBuilder = new StringBuilder(ProjectHeader(island, responseFileData));
+            if (assemblyAsset != null && assemblyAsset.sharedProject)
+            {
+                var shprojBuilder = new StringBuilder(ProjectHeader(island, responseFileData, true, false));
+                var projitemsBuilder = new StringBuilder(ProjectHeader(island, responseFileData, false, true));
+
+                foreach (string file in island._files)
+                {
+                    if (!ShouldFileBePartOfSolution(file))
+                        continue;
+
+                    var extension = Path.GetExtension(file).ToLower();
+                    var fullFile = EscapedRelativePathFor(file);
+                    if (".dll" != extension)
+                    {
+                        var tagName = "Compile";
+                        projitemsBuilder.AppendFormat("{2}     <{0} Include=\"$(MSBuildThisFileDirectory){1}\" />", tagName, fullFile, WindowsNewline);
+                    }
+                }
+                projitemsBuilder.Append(string.Format(_settings.GetProjitemsFooterTemplate(ScriptingLanguageFor(island)), ReadExistingMonoDevelopProjectProperties(island)));
+                return new Tuple<string, string>(shprojBuilder.ToString(), projitemsBuilder.ToString());
+            }
+            var projectBuilder = new StringBuilder(ProjectHeader(island, responseFileData, false, false));
             var references = new List<string>();
             var projectReferences = new List<Match>();
             Match match;
@@ -398,9 +434,9 @@ namespace UnityEditor.VisualStudioIntegration
 
             foreach (string reference in references.Union(island._references).Union(responseFileData.References.Select(r => r.Assembly)))
             {
-                if (reference.EndsWith("/UnityEditor.dll") || reference.EndsWith("/UnityEngine.dll") || reference.EndsWith("\\UnityEditor.dll") || reference.EndsWith("\\UnityEngine.dll"))
+                if (assemblyAsset != null && assemblyAsset.excludeAssembliesReferences.Contains(Path.GetFileName(reference)))
                     continue;
-
+                
                 match = scriptReferenceExpression.Match(reference);
                 if (match.Success)
                 {
@@ -432,7 +468,7 @@ namespace UnityEditor.VisualStudioIntegration
                         continue;
                     allAdditionalReferenceFilenames.Add(referenceName);
                 }
-
+                
                 //replace \ with / and \\ with /
                 fullReference = fullReference.Replace("\\", "/");
                 fullReference = fullReference.Replace("\\\\", "/");
@@ -448,26 +484,47 @@ namespace UnityEditor.VisualStudioIntegration
                 projectBuilder.AppendLine("  <ItemGroup>");
                 foreach (Match reference in projectReferences)
                 {
-                    var targetAssembly = EditorCompilationInterface.Instance.GetTargetAssemblyDetails(reference.Groups["dllname"].Value);
-                    ScriptingLanguage targetLanguage = ScriptingLanguage.None;
-                    if (targetAssembly != null)
-                        targetLanguage = (ScriptingLanguage)Enum.Parse(typeof(ScriptingLanguage), targetAssembly.Language.GetLanguageName(), true);
-                    referencedProject = reference.Groups["project"].Value;
-                    projectBuilder.AppendFormat("    <ProjectReference Include=\"{0}{1}\">{2}", referencedProject,
-                        GetProjectExtension(targetLanguage), WindowsNewline);
-                    projectBuilder.AppendFormat("      <Project>{{{0}}}</Project>", ProjectGuid(Path.Combine("Temp", reference.Groups["project"].Value + ".dll")), WindowsNewline);
-                    projectBuilder.AppendFormat("      <Name>{0}</Name>", referencedProject, WindowsNewline);
-                    projectBuilder.AppendLine("    </ProjectReference>");
+                    var refAssemblyAssetPath = Compilation.CompilationPipeline.GetAssemblyDefinitionFilePathFromAssemblyName(Path.GetFileName(reference.Value).Replace(Path.GetExtension(reference.Value), ""));
+                    var refAssemblyAsset = !string.IsNullOrEmpty(refAssemblyAssetPath) ? CustomScriptAssemblyData.FromJson(AssetDatabase.LoadAssetAtPath<AssemblyDefinitionAsset>(refAssemblyAssetPath).text) : null;
+                    if (refAssemblyAsset != null && refAssemblyAsset.sharedProject)
+                    {
+                        projectBuilder.AppendFormat("  </ItemGroup>{1}  <Import Project=\"{0}.projitems\" Label=\"Shared\" />{1}  <ItemGroup>{1}", Path.GetFileName(reference.Value).Replace(Path.GetExtension(reference.Value), ""), WindowsNewline);
+                    }
+                    else
+                    {
+                        var targetAssembly = EditorCompilationInterface.Instance.GetTargetAssemblyDetails(reference.Groups["dllname"].Value);
+                        ScriptingLanguage targetLanguage = ScriptingLanguage.None;
+                        if (targetAssembly != null)
+                            targetLanguage = (ScriptingLanguage)Enum.Parse(typeof(ScriptingLanguage), targetAssembly.Language.GetLanguageName(), true);
+                        referencedProject = reference.Groups["project"].Value;
+                        projectBuilder.AppendFormat("    <ProjectReference Include=\"{0}{1}\">{2}", referencedProject,
+                            GetProjectExtension(targetLanguage), WindowsNewline);
+                        projectBuilder.AppendFormat("      <Project>{{{0}}}</Project>", ProjectGuid(Path.Combine("Temp", reference.Groups["project"].Value + ".dll")), WindowsNewline);
+                        projectBuilder.AppendFormat("      <Name>{0}</Name>", referencedProject, WindowsNewline);
+                        projectBuilder.AppendLine("    </ProjectReference>");
+                    }
                 }
             }
 
-            projectBuilder.Append(ProjectFooter(island));
-            return projectBuilder.ToString();
+            projectBuilder.Append(string.Format(_settings.GetProjectFooterTemplate(ScriptingLanguageFor(island)), ReadExistingMonoDevelopProjectProperties(island)));
+            return new Tuple<string, string>(projectBuilder.ToString(), string.Empty);
+        }
+
+        private CustomScriptAssemblyData GeAssemblyAsset(MonoIsland island)
+        {
+            var assemblyAssetPath = Compilation.CompilationPipeline.GetAssemblyDefinitionFilePathFromAssemblyName(Path.GetFileName(island._output).Replace(Path.GetExtension(island._output), ""));
+            var assemblyAsset = !string.IsNullOrEmpty(assemblyAssetPath) ? CustomScriptAssemblyData.FromJson(AssetDatabase.LoadAssetAtPath<AssemblyDefinitionAsset>(assemblyAssetPath).text) : null;
+            return assemblyAsset;
         }
 
         public string ProjectFile(MonoIsland island)
         {
             ScriptingLanguage language = ScriptingLanguageFor(island);
+            var assemblyAsset = GeAssemblyAsset(island);
+            if (assemblyAsset != null && assemblyAsset.sharedProject)
+            {
+                return Path.Combine(_projectDirectory, string.Format("{0}{1}", Path.GetFileNameWithoutExtension(island._output), ".shproj"));
+            }
             return Path.Combine(_projectDirectory, string.Format("{0}{1}", Path.GetFileNameWithoutExtension(island._output), ProjectExtensions[language]));
         }
 
@@ -477,7 +534,7 @@ namespace UnityEditor.VisualStudioIntegration
         }
 
         private string ProjectHeader(MonoIsland island,
-            ScriptCompilerBase.ResponseFileData responseFileData)
+            ScriptCompilerBase.ResponseFileData responseFileData, bool shared, bool projitems)
         {
             string targetframeworkversion = "v3.5";
             string targetLanguageVersion = "4";
@@ -518,6 +575,10 @@ namespace UnityEditor.VisualStudioIntegration
 
             try
             {
+                if (shared)
+                    return string.Format(_settings.GetSharedProjectHeaderTemplate(language), arguments);
+                if (projitems)
+                    return string.Format(_settings.GetProjitemsHeaderTemplate(language), arguments);
                 return string.Format(_settings.GetProjectHeaderTemplate(language), arguments);
             }
             catch (Exception)
@@ -610,12 +671,10 @@ namespace UnityEditor.VisualStudioIntegration
 
         string SolutionGuid(MonoIsland island)
         {
+            var assemblyAsset = GeAssemblyAsset(island);
+            if (assemblyAsset != null && assemblyAsset.sharedProject)
+                return "D954291E-2A0B-460D-934E-DC6B0785DB48";
             return SolutionGuidGenerator.GuidForSolution(_projectName, island.GetExtensionOfSourceFiles());
-        }
-
-        string ProjectFooter(MonoIsland island)
-        {
-            return string.Format(_settings.GetProjectFooterTemplate(ScriptingLanguageFor(island)), ReadExistingMonoDevelopProjectProperties(island));
         }
 
         string ReadExistingMonoDevelopSolutionProperties()

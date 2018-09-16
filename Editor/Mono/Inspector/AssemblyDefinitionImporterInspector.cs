@@ -11,6 +11,8 @@ using UnityEditor.Scripting.ScriptCompilation;
 using UnityEditor.Experimental.AssetImporters;
 using UnityEditor.Compilation;
 using System;
+using UnityEditor.Scripting;
+using UnityEditor.Scripting.Compilers;
 
 namespace UnityEditor
 {
@@ -21,10 +23,12 @@ namespace UnityEditor
         internal class Styles
         {
             public static readonly GUIContent name = EditorGUIUtility.TrTextContent("Name");
+            public static readonly GUIContent excludeAssembliesReferences = EditorGUIUtility.TrTextContent("Exclude Assemblies References");
             public static readonly GUIContent unityReferences = EditorGUIUtility.TrTextContent("Unity References");
             public static readonly GUIContent references = EditorGUIUtility.TrTextContent("References");
             public static readonly GUIContent options = EditorGUIUtility.TrTextContent("Options");
             public static readonly GUIContent allowUnsafeCode = EditorGUIUtility.TrTextContent("Allow 'unsafe' Code");
+            public static readonly GUIContent sharedProject = EditorGUIUtility.TrTextContent("Shared Project");
             public static readonly GUIContent platforms = EditorGUIUtility.TrTextContent("Platforms");
             public static readonly GUIContent anyPlatform = EditorGUIUtility.TrTextContent("Any Platform");
             public static readonly GUIContent includePlatforms = EditorGUIUtility.TrTextContent("Include Platforms");
@@ -67,9 +71,11 @@ namespace UnityEditor
             public List<AssemblyDefinitionReference> references;
             public MixedBool[] optionalUnityReferences;
             public MixedBool allowUnsafeCode;
+            public MixedBool sharedProject;
             public MixedBool compatibleWithAnyPlatform;
             public MixedBool[] platformCompatibility;
             public bool modified;
+            public List<string> excludeAssembliesReferences = new List<string>();
         }
 
         AssemblyDefintionState[] m_TargetStates;
@@ -78,6 +84,8 @@ namespace UnityEditor
         ReorderableList m_ReferencesList;
 
         public override bool showImportedObject { get { return false; } }
+        private static readonly HashSet<string> islandsHasTemp = new HashSet<string>();
+        private static readonly List<string> islandsListTemp = new List<string>();
 
         public override void OnInspectorGUI()
         {
@@ -117,7 +125,7 @@ namespace UnityEditor
 
                 GUILayout.Label(Styles.references, EditorStyles.boldLabel);
                 m_ReferencesList.DoLayoutList();
-
+                
                 GUILayout.Label(Styles.unityReferences, EditorStyles.boldLabel);
                 EditorGUILayout.BeginVertical(GUI.skin.box);
                 for (int i = 0; i < optionalUnityReferences.Length; ++i)
@@ -135,6 +143,7 @@ namespace UnityEditor
                 GUILayout.Label(Styles.options, EditorStyles.boldLabel);
                 EditorGUILayout.BeginVertical(GUI.skin.box);
                 m_State.allowUnsafeCode = ToggleWithMixedValue(Styles.allowUnsafeCode, m_State.allowUnsafeCode);
+                m_State.sharedProject = ToggleWithMixedValue(Styles.sharedProject, m_State.sharedProject);
                 EditorGUILayout.EndVertical();
                 GUILayout.Space(10f);
 
@@ -189,6 +198,39 @@ namespace UnityEditor
                 EditorGUILayout.EndVertical();
                 GUILayout.Space(10f);
 
+                GUILayout.Label(Styles.excludeAssembliesReferences, EditorStyles.boldLabel);
+                EditorGUILayout.BeginVertical(GUI.skin.box);
+                var islands = EditorCompilationInterface.GetAllMonoIslands();
+                foreach (var island in islands)
+                {
+                    foreach (var reference in island._references)
+                    {
+                        var referenceName = Path.GetFileName(reference);
+                        if (islandsHasTemp.Contains(referenceName))
+                            continue;
+                        islandsHasTemp.Add(referenceName);
+                        islandsListTemp.Add(referenceName);
+                    }
+                }
+                islandsListTemp.Sort();
+                
+                foreach (var referenceName in islandsListTemp)
+                {
+                    var referenceContains = m_State.excludeAssembliesReferences.Contains(referenceName);
+                    var referencResult = ToggleWithMixedValue(new GUIContent(referenceName), referenceContains ? MixedBool.True : MixedBool.False);
+                    if ((referencResult == MixedBool.True) != referenceContains)
+                    {
+                        if (referenceContains)
+                            m_State.excludeAssembliesReferences.Remove(referenceName);
+                        else
+                            m_State.excludeAssembliesReferences.Add(referenceName);
+                    }
+                }
+                islandsListTemp.Clear();
+                islandsHasTemp.Clear();
+                EditorGUILayout.EndVertical();
+                GUILayout.Space(10f);
+                
                 if (EditorGUI.EndChangeCheck())
                     m_State.modified = true;
             }
@@ -335,6 +377,8 @@ namespace UnityEditor
             m_State.references = new List<AssemblyDefinitionReference>();
             m_State.modified = m_TargetStates[0].modified;
             m_State.allowUnsafeCode = m_TargetStates[0].allowUnsafeCode;
+            m_State.sharedProject = m_TargetStates[0].sharedProject;
+            m_State.excludeAssembliesReferences = new List<string>(m_TargetStates[0].excludeAssembliesReferences);
 
             for (int i = 0; i < minReferencesCount; ++i)
                 m_State.references.Add(m_TargetStates[0].references[i]);
@@ -358,6 +402,12 @@ namespace UnityEditor
                 {
                     if (m_State.allowUnsafeCode != targetState.allowUnsafeCode)
                         m_State.allowUnsafeCode = MixedBool.Mixed;
+                }
+
+                if (m_State.sharedProject != MixedBool.Mixed)
+                {
+                    if (m_State.sharedProject != targetState.sharedProject)
+                        m_State.sharedProject = MixedBool.Mixed;
                 }
 
                 m_State.modified |= targetState.modified;
@@ -439,6 +489,8 @@ namespace UnityEditor
             state.name = data.name;
             state.references = new List<AssemblyDefinitionReference>();
             state.allowUnsafeCode = ToMixedBool(data.allowUnsafeCode);
+            state.sharedProject = ToMixedBool(data.sharedProject);
+            state.excludeAssembliesReferences = new List<string>(data.excludeAssembliesReferences);
 
             if (data.references != null)
             {
@@ -543,6 +595,9 @@ namespace UnityEditor
             {
                 if (combinedState.allowUnsafeCode != MixedBool.Mixed)
                     state.allowUnsafeCode = combinedState.allowUnsafeCode;
+                
+                if (combinedState.sharedProject != MixedBool.Mixed)
+                    state.sharedProject = combinedState.sharedProject;
 
                 for (int i = 0; i < combinedReferenceCount; ++i)
                 {
@@ -564,6 +619,8 @@ namespace UnityEditor
                     if (combinedState.platformCompatibility[i] != MixedBool.Mixed)
                         state.optionalUnityReferences[i] = combinedState.optionalUnityReferences[i];
                 }
+                
+                state.excludeAssembliesReferences = new List<string>(combinedState.excludeAssembliesReferences);
 
                 SaveAssemblyDefinitionState(state);
             }
@@ -593,6 +650,8 @@ namespace UnityEditor
             data.optionalUnityReferences = optionalUnityReferences.ToArray();
 
             data.allowUnsafeCode = ToBool(state.allowUnsafeCode);
+            data.sharedProject = ToBool(state.sharedProject);
+            data.excludeAssembliesReferences = new List<string>(state.excludeAssembliesReferences);
 
             List<string> dataPlatforms = new List<string>();
 

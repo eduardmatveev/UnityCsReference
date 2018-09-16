@@ -23,6 +23,9 @@ namespace UnityEditor.VisualStudioIntegration
         string EngineAssemblyPath { get; }
         string MonoLibFolder { get; }
         string[] Defines { get; }
+        string GetSharedProjectHeaderTemplate(ScriptingLanguage language);
+        string GetProjitemsHeaderTemplate(ScriptingLanguage language);
+        string GetProjitemsFooterTemplate(ScriptingLanguage language);
         string GetProjectHeaderTemplate(ScriptingLanguage language);
         string GetProjectFooterTemplate(ScriptingLanguage language);
     }
@@ -84,7 +87,43 @@ namespace UnityEditor.VisualStudioIntegration
                 }).Replace("    ", "\t");
             }
         }
-
+        
+        public virtual string GetSharedProjectHeaderTemplate(ScriptingLanguage language)
+        {
+            var text = new[] {
+                @"<?xml version=""1.0"" encoding=""utf-8""?>",
+                @"<Project ToolsVersion=""4.0"" xmlns=""http://schemas.microsoft.com/developer/msbuild/2003"">",
+                @"  <PropertyGroup Label=""Globals"">",
+                @"    <ProjectGuid>{{{2}}}</ProjectGuid>",
+                @"  </PropertyGroup>",
+                @"    <Import Project=""$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props"" Condition=""Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')"" />",
+                @"    <Import Project=""$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\CodeSharing\Microsoft.CodeSharing.Common.Default.props"" />",
+                @"    <Import Project=""$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\CodeSharing\Microsoft.CodeSharing.Common.props"" />",
+                @"    <Import Project=""{7}.projitems"" Label=""Shared"" />",
+                @"    <Import Project=""$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\CodeSharing\Microsoft.CodeSharing.CSharp.targets"" />",
+                @"</Project>",
+            };
+            return string.Join("\r\n", text);
+        }
+        
+        public virtual string GetProjitemsHeaderTemplate(ScriptingLanguage language)
+        {
+            var text = new[] {
+                @"<?xml version=""1.0"" encoding=""utf-8""?>",
+                @"<Project ToolsVersion=""4.0"" xmlns=""http://schemas.microsoft.com/developer/msbuild/2003"">",
+                @"  <PropertyGroup>",
+                @"    <MSBuildAllProjects>$(MSBuildAllProjects);$(MSBuildThisFileFullPath)</MSBuildAllProjects>",
+                @"    <HasSharedItems>true</HasSharedItems>",
+                @"    <SharedGUID>4B9D7A72-E02E-472C-8D3F-82CD5F52E769</SharedGUID>",
+                @"  </PropertyGroup>",
+                @"  <PropertyGroup Label=""Configuration"">",
+                @"    <Import_RootNamespace>{7}</Import_RootNamespace>",
+                @"  </PropertyGroup>",
+                @"  <ItemGroup>",
+            };
+            return string.Join("\r\n", text);
+        }
+        
         public virtual string GetProjectHeaderTemplate(ScriptingLanguage language)
         {
             var header = new[] {
@@ -151,26 +190,23 @@ namespace UnityEditor.VisualStudioIntegration
                 @"    <Reference Include=""System.Xml.Linq"" />",
             };
 
-            var footer = new string[] {
-                @"    <Reference Include=""UnityEngine"">",
-                @"      <HintPath>{3}</HintPath>",
-                @"    </Reference>",
-                @"    <Reference Include=""UnityEditor"">",
-                @"      <HintPath>{4}</HintPath>",
-                @"    </Reference>",
-                @"  </ItemGroup>",
-                @"  <ItemGroup>",
-                @""
-            };
-
             string[] text;
 
             if (language == ScriptingLanguage.CSharp)
-                text = header.Concat(forceExplicitReferences).Concat(itemGroupStart).Concat(footer).ToArray();
+                text = header.Concat(forceExplicitReferences).Concat(itemGroupStart).ToArray();
             else
-                text = header.Concat(itemGroupStart).Concat(systemReferences).Concat(footer).ToArray();
+                text = header.Concat(itemGroupStart).Concat(systemReferences).ToArray();
 
             return string.Join("\r\n", text);
+        }
+
+        public virtual string GetProjitemsFooterTemplate(ScriptingLanguage language)
+        {
+            return string.Join("\r\n", new[] {
+                @"  </ItemGroup>",
+                @"</Project>",
+                @""
+            });
         }
 
         public virtual string GetProjectFooterTemplate(ScriptingLanguage language)
